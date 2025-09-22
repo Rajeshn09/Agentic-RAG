@@ -1,0 +1,130 @@
+-- =============================================================================
+-- Final Schema for a Multi-Tenant RAG Platform with API Access
+-- Database: PostgreSQL
+-- Extensions: pgvector, uuid-ossp
+-- =============================================================================
+
+-- Step 1: Enable Necessary Extensions
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+CREATE EXTENSION IF NOT EXISTS vector;
+
+
+-- =============================================================================
+-- SECTION 1: TENANCY AND USER MANAGEMENT
+-- =============================================================================
+
+-- Manages the customer organizations (tenants) using the service.
+CREATE TABLE "Tenants" (
+    "id" UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    "name" VARCHAR(255) UNIQUE NOT NULL,
+    "plan" VARCHAR(50) DEFAULT 'trial' NOT NULL,
+    "createdAt" TIMESTAMPTZ DEFAULT NOW(),
+    "updatedAt" TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Manages users, who belong to a tenant and have specific roles.
+CREATE TABLE "Users" (
+    "id" UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    "tenantId" UUID NOT NULL REFERENCES "Tenants"("id") ON DELETE CASCADE,
+    "email" VARCHAR(255) NOT NULL,
+    "fullName" VARCHAR(255),
+    "role" VARCHAR(50) DEFAULT 'member' NOT NULL,
+    "createdAt" TIMESTAMPTZ DEFAULT NOW(),
+    "updatedAt" TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE ("tenantId", "email")
+);
+
+
+-- =============================================================================
+-- SECTION 2: CORE RAG CONTENT TABLES
+-- =============================================================================
+
+-- Defines a custom ENUM type for document processing status for type safety.
+CREATE TYPE "document_status" AS ENUM (
+    'PENDING',
+    'PROCESSING',
+    'COMPLETED',
+    'FAILED'
+);
+
+-- Organizes documents into collections, scoped to a tenant.
+CREATE TABLE "Corpora" (
+    "id" UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    "tenantId" UUID NOT NULL REFERENCES "Tenants"("id") ON DELETE CASCADE,
+    "userId" UUID NOT NULL REFERENCES "Users"("id") ON DELETE CASCADE,
+    "name" VARCHAR(255) NOT NULL,
+    "description" TEXT,
+    "createdAt" TIMESTAMPTZ DEFAULT NOW(),
+    "updatedAt" TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE ("tenantId", "name")
+);
+
+-- Tracks metadata for each uploaded source document.
+CREATE TABLE "Documents" (
+    "id" UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    "tenantId" UUID NOT NULL REFERENCES "Tenants"("id") ON DELETE CASCADE,
+    "corpusId" UUID NOT NULL REFERENCES "Corpora"("id") ON DELETE CASCADE,
+    "originalFilename" VARCHAR(255) NOT NULL,
+    "storagePath" VARCHAR(1024) NOT NULL,
+    "fileType" VARCHAR(50) NOT NULL,
+    "fileSizeBytes" BIGINT,
+    "processingStatus" "document_status" DEFAULT 'PENDING' NOT NULL,
+    "errorMessage" TEXT,
+    "uploadedAt" TIMESTAMPTZ DEFAULT NOW(),
+    "updatedAt" TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Stores the text chunks and their vector embeddings.
+CREATE TABLE "Chunks" (
+    "id" UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    "tenantId" UUID NOT NULL REFERENCES "Tenants"("id") ON DELETE CASCADE,
+    "documentId" UUID NOT NULL REFERENCES "Documents"("id") ON DELETE CASCADE,
+    "chunkText" TEXT NOT NULL,
+    "chunkIndex" INT NOT NULL,
+    "pageNumber" INT,
+    "tokenCount" INT,
+    "embedding" VECTOR(1536),
+    "createdAt" TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE ("documentId", "chunkIndex")
+);
+
+
+-- =============================================================================
+-- SECTION 3: API ACCESS MANAGEMENT
+-- =============================================================================
+
+-- Manages API keys for tenants to allow secure programmatic access.
+CREATE TABLE "ApiKeys" (
+    "id" UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    "tenantId" UUID NOT NULL REFERENCES "Tenants"("id") ON DELETE CASCADE,
+    "userId" UUID NOT NULL REFERENCES "Users"("id") ON DELETE CASCADE,
+    "name" VARCHAR(255) NOT NULL,
+    "keyPrefix" VARCHAR(10) UNIQUE NOT NULL,
+    "keyHash" TEXT NOT NULL,
+    "scopes" JSONB,
+    "expiresAt" TIMESTAMPTZ,
+    "lastUsedAt" TIMESTAMPTZ,
+    "createdAt" TIMESTAMPTZ DEFAULT NOW()
+);
+
+
+-- =============================================================================
+-- SECTION 4: INDEXES FOR PERFORMANCE
+-- =============================================================================
+
+-- B-Tree indexes for fast JOINs and WHERE clauses
+CREATE INDEX ON "Users" ("tenantId");
+CREATE INDEX ON "Corpora" ("tenantId");
+CREATE INDEX ON "Documents" ("tenantId");
+CREATE INDEX ON "Documents" ("corpusId");
+CREATE INDEX ON "Chunks" ("tenantId");
+CREATE INDEX ON "Chunks" ("documentId");
+CREATE INDEX ON "ApiKeys" ("tenantId");
+
+-- Specialized HNSW index for fast vector similarity search
+CREATE INDEX ON "Chunks" USING HNSW ("embedding" vector_cosine_ops);
+
+
+-- =============================================================================
+-- END OF SCHEMA
+-- =============================================================================
