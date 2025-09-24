@@ -64,13 +64,16 @@ CREATE TABLE "Documents" (
     "id" UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     "tenantId" UUID NOT NULL REFERENCES "Tenants"("id") ON DELETE CASCADE,
     "corpusId" UUID NOT NULL REFERENCES "Corpora"("id") ON DELETE CASCADE,
-    "originalFilename" VARCHAR(255) NOT NULL,
-    "storagePath" VARCHAR(1024) NOT NULL,
+    "originalFileName" VARCHAR(255) NOT NULL,
     "fileType" VARCHAR(50) NOT NULL,
     "fileSizeBytes" BIGINT,
     "processingStatus" "document_status" DEFAULT 'PENDING' NOT NULL,
+    "rawText" TEXT,
+    "metadata" JSONB,
+    "autotag" JSONB,
     "errorMessage" TEXT,
     "uploadedAt" TIMESTAMPTZ DEFAULT NOW(),
+    "createdAt" TIMESTAMPTZ DEFAULT NOW(),
     "updatedAt" TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -81,10 +84,10 @@ CREATE TABLE "Chunks" (
     "documentId" UUID NOT NULL REFERENCES "Documents"("id") ON DELETE CASCADE,
     "chunkText" TEXT NOT NULL,
     "chunkIndex" INT NOT NULL,
-    "pageNumber" INT,
     "tokenCount" INT,
     "embedding" VECTOR(1536),
     "createdAt" TIMESTAMPTZ DEFAULT NOW(),
+    "updatedAt" TIMESTAMPTZ DEFAULT NOW()
     UNIQUE ("documentId", "chunkIndex")
 );
 
