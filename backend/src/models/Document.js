@@ -102,4 +102,5 @@ export default class Document {
         );
         return rowCount > 0;
     }
+
 }

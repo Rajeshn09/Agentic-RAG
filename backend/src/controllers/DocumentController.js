@@ -1,4 +1,5 @@
-import Document from "../models/Document.js";  
+import Document from "../models/Document.js";
+import DocumentUpload from "../services/DocumentUpload.js";
 
 export default class DocumentController {
     static async createDocument(req, res) {
@@ -73,4 +74,76 @@ export default class DocumentController {
             return res.status(500).json({ error: 'Internal server error.' });
         }
     }
+
+    static async document_upload(req, res) {
+        try {
+            const { 
+                tenantId, 
+                userId, 
+                corpusId, 
+                file_path,
+                embeddingModel,
+                autotagModel,
+                autotagSchema,
+                metadata 
+            } = req.body;
+            const file = req.file;
+            
+            if (!tenantId || !userId || !corpusId) {
+                return res.status(400).json({ 
+                    error: 'tenantId, userId, and corpusId are required' 
+                });
+            }
+            if (metadata && typeof metadata !== 'object') {
+                return res.status(400).json({ 
+                    error: 'metadata must be an object' 
+                });
+            }
+            if (!file && !file_path) {
+                return res.status(400).json({ 
+                    error: 'Either file upload or file_path (URL) is required' 
+                });
+            }
+            
+            if (file && file_path) {
+                return res.status(400).json({ 
+                    error: 'Please provide either file or file_path, not both' 
+                });
+            }
+            
+            let parsedAutotagSchema = null;
+            if (autotagSchema) {
+                try {
+                    parsedAutotagSchema = typeof autotagSchema === 'string' ? JSON.parse(autotagSchema) : autotagSchema;
+                } catch (e) {
+                    return res.status(400).json({ error: 'Invalid autotagSchema JSON format' });
+                }
+            }
+            
+            const result = await DocumentUpload.uploadDocument({
+                file,
+                file_path,
+                tenantId,
+                userId,
+                corpusId,
+                embeddingModel,
+                autotagModel,
+                autotagSchema: parsedAutotagSchema,
+                metadata
+            });
+            
+            return res.status(201).json({ 
+                message: 'Document uploaded and processed successfully',
+                document: result
+            });
+            
+        } catch (error) {
+            console.error('document_upload error:', error);
+            return res.status(500).json({ 
+                error: 'Internal server error',
+                details: error.message 
+            });
+        }
+    }
+
 }

@@ -1,10 +1,39 @@
 // backend/src/routes/routes.js
 import express from 'express';
+import multer from 'multer';
 import TenantController from '../controllers/TenantController.js';
 import UserController  from '../controllers/UserController.js';
 import CorporaController from '../controllers/CorporaController.js';
 import DocumentController from '../controllers/DocumentController.js';
 import ChunkController from '../controllers/ChunkController.js';
+import SearchController from '../controllers/SearchController.js';
+
+
+
+
+
+
+
+const upload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 100 * 1024 * 1024 },
+    fileFilter: (req, file, cb) => {
+        const allowedTypes = [
+            'application/pdf',
+            'text/plain',
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            'application/vnd.ms-excel',
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'application/vnd.ms-powerpoint',
+            'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+        ];
+        if (allowedTypes.includes(file.mimetype)) {
+            cb(null, true);
+        } else {
+            cb(new Error('Unsupported file type'), false);
+        }
+    }
+});
 
 const router = express.Router();
 
@@ -42,6 +71,18 @@ router.get('/chunks', ChunkController.listChunks);
 router.get('/chunk/:id', ChunkController.getChunk);
 router.put('/chunk/:id', ChunkController.updateChunk);
 router.delete('/chunk/:id', ChunkController.deleteChunk);
+
+// Document upload endpoint - handles both file uploads and URLs
+router.post('/document/upload', upload.single('file'), DocumentController.document_upload);
+
+
+// Document search endpoint
+router.post('/document/search', ChunkController.searchChunks);
+
+
+// Check document processing status
+router.get('/document/:id/status', DocumentController.getDocument);
+
 
 
 export default router;

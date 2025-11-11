@@ -9,7 +9,7 @@ export default class CorporaController {
         return res.status(400).json({ error: 'Corpora name is required.' });
       }
 
-      const existing = await Corpora.findByName(name.trim());
+      const existing = await Corpora.findByName(name.trim(), tenantId);
       if (existing) {
         return res.status(409).json({ error: 'Corpora with this name already exists.' });
       }
@@ -53,7 +53,7 @@ export default class CorporaController {
       const { tenantId, userId, name, description } = req.body;
 
       if (name) {
-        const existing = await Corpora.findByName(name.trim());
+        const existing = await Corpora.findByName(name.trim(), tenantId);
         if (existing && existing.id !== id) {
           return res.status(409).json({ error: 'Another Corpora with this name already exists.' });
         }

@@ -13,10 +13,10 @@ export default class Corpora {
         return rows[0];
     }
     
-    static async findByName(name) {
+    static async findByName(name, tenantId) {
         const { rows } = await pool.query(
-            `SELECT * FROM "Corpora" WHERE "name" = $1;`,
-            [name]
+            `SELECT * FROM "Corpora" WHERE "name" = $1 AND "tenantId" = $2;`,
+            [name, tenantId]
         );
         return rows[0] || null;
     }

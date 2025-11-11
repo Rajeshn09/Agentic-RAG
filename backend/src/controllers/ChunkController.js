@@ -1,11 +1,12 @@
 import Chunk from '../models/Chunk.js';
+import DocumentSearch from '../services/DocumentSearch.js';
 
 export default class ChunkController {
     static async createChunk(req, res) {
         try {
-            const { tenantId, documentId, chunkIndex, chunkText, tokenCount, embedding } = req.body;
-            if (!tenantId || !documentId || chunkIndex === undefined || !chunkText) {
-                return res.status(400).json({ error: 'tenantId, documentId, chunkIndex, and chunkText are required.' });
+            const { tenantId, corpusId, documentId, chunkIndex, chunkText, tokenCount, embedding } = req.body;
+            if (!tenantId || !corpusId || !documentId || chunkIndex === undefined || !chunkText) {
+                return res.status(400).json({ error: 'tenantId, corpusId, documentId, chunkIndex, and chunkText are required.' });
             }
 
             // // Optional: Validate that the document belongs to the tenant
@@ -78,6 +79,50 @@ export default class ChunkController {
         } catch (err) {
             console.error('deleteChunk error:', err);
             return res.status(500).json({ error: 'Internal server error.' });
+        }
+    }
+
+    static async searchChunks(req, res) {
+        try {
+            const { 
+                tenantId, 
+                corpusId,
+                query,           
+                queryEmbedding,  
+                embeddingModel,
+                rerankModel,
+                llmModel,
+                prompt,
+                similarityThreshold = 0.30,
+                filters = {},
+                limit = 10 
+            } = req.body;
+
+            const results = await DocumentSearch.searchChunks({
+                tenantId,
+                corpusId,
+                query,
+                queryEmbedding,
+                embeddingModel,
+                rerankModel,
+                llmModel,
+                prompt,
+                similarityThreshold,
+                filters,
+                limit
+            });
+
+            return res.status(200).json({
+                message: 'Chunks retrieved successfully',
+                results,
+                count: results.length
+            });
+        } catch (error) {
+            console.error('searchChunks error:', error);
+            return res.status(500).json({ 
+                error: 'Internal server error',
+                details: error.message 
+            });
         }
     }
 }

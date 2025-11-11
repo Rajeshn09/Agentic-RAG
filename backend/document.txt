@@ -81,6 +81,7 @@ CREATE TABLE "Documents" (
 CREATE TABLE "Chunks" (
     "id" UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     "tenantId" UUID NOT NULL REFERENCES "Tenants"("id") ON DELETE CASCADE,
+    "corpusId" UUID NOT NULL REFERENCES "Corpora"("id") ON DELETE CASCADE,
     "documentId" UUID NOT NULL REFERENCES "Documents"("id") ON DELETE CASCADE,
     "chunkText" TEXT NOT NULL,
     "chunkIndex" INT NOT NULL,
@@ -121,7 +122,7 @@ CREATE INDEX ON "Corpora" ("tenantId");
 CREATE INDEX ON "Documents" ("tenantId");
 CREATE INDEX ON "Documents" ("corpusId");
 CREATE INDEX ON "Chunks" ("tenantId");
-CREATE INDEX ON "Chunks" ("documentId");
+CREATE INDEX ON "Chunks" ("documentId", "tenantId", "corpusId");
 CREATE INDEX ON "ApiKeys" ("tenantId");
 
 -- Specialized HNSW index for fast vector similarity search

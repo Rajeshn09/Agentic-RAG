@@ -3,13 +3,14 @@ import db from '../config/database.js';
 const { pool } = db;
 
 export default class Chunk {
-    static async create( { tenantId, documentId, chunkIndex, chunkText, tokenCount, embedding } ) {
+    static async create( { tenantId, corpusId, documentId, chunkIndex, chunkText, tokenCount, embedding } ) {
         const sql = `
-            INSERT INTO "Chunks" ("tenantId", "documentId", "chunkIndex", "chunkText", "tokenCount", "embedding")
-            VALUES ($1, $2, $3, $4, $5, $6)
+            INSERT INTO "Chunks" ("tenantId", "corpusId", "documentId", "chunkIndex", "chunkText", "tokenCount", "embedding")
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
             RETURNING *;
         `;
-        const { rows } = await pool.query(sql, [tenantId, documentId, chunkIndex, chunkText, tokenCount, embedding]);
+        const formattedEmbedding = embedding ? `[${embedding.join(',')}]` : null;
+        const { rows } = await pool.query(sql, [tenantId, corpusId, documentId, chunkIndex, chunkText, tokenCount, formattedEmbedding]);
         return rows[0];
     }
 
@@ -59,7 +60,8 @@ export default class Chunk {
         }
         if (embedding !== undefined) {
             fields.push(`"embedding" = $${idx++}`);
-            values.push(embedding);
+            const formattedEmbedding = embedding ? `[${embedding.join(',')}]` : null;
+            values.push(formattedEmbedding);
         }
 
         if (fields.length === 0) {
@@ -88,4 +90,47 @@ export default class Chunk {
         const { rows } = await pool.query(sql, [id]);
         return rows[0] || null;
     }
+
+
+    static async ragSearch(tenantId, corpusId, queryEmbedding, filters = {}, topK = 10, similarityThreshold = 0.0) {
+        const sql = `
+            SELECT 
+                c.id,
+                c."chunkText",
+                c."chunkIndex",
+                c."documentId",
+                d."autotag",
+                1 - (c.embedding <=> $1) AS similarity
+            FROM "Chunks" c
+            JOIN "Documents" d
+            ON c."documentId" = d."id"
+            WHERE c."tenantId" = $2
+            AND c."corpusId" = $3
+            AND c.embedding IS NOT NULL
+            AND d."metadata" @> $5::jsonb
+            AND d."autotag" @> $6::jsonb
+            AND (1 - (c.embedding <=> $1)) >= $7
+            ORDER BY similarity DESC
+            LIMIT $4;
+        `;
+
+        const formattedEmbedding = queryEmbedding ? `[${queryEmbedding.join(',')}]` : null;
+
+        const metadataFilter = filters.metadata || {};
+        const autotagFilter = filters.autotag || {};
+
+        const { rows } = await pool.query(sql, [
+            formattedEmbedding,              
+            tenantId,                        
+            corpusId,                        
+            topK,                           
+            JSON.stringify(metadataFilter),  
+            JSON.stringify(autotagFilter),
+            similarityThreshold
+        ]);
+
+        return rows;
+    }
+       
+
 }
