@@ -1,4 +1,5 @@
 import db from '../config/database.js';
+import { ServiceErrorHandler } from '../utils/ServiceErrorHandler.js';
 
 const { pool } = db;
 
@@ -10,14 +11,22 @@ export default class Chunk {
             RETURNING *;
         `;
         const formattedEmbedding = embedding ? `[${embedding.join(',')}]` : null;
-        const { rows } = await pool.query(sql, [tenantId, corpusId, documentId, chunkIndex, chunkText, tokenCount, formattedEmbedding]);
+        const { rows } = await ServiceErrorHandler.handleDatabaseOperation(
+            () => pool.query(sql, [tenantId, corpusId, documentId, chunkIndex, chunkText, tokenCount, formattedEmbedding]),
+            'chunk creation',
+            { tenantId, corpusId, documentId, chunkIndex }
+        );
         return rows[0];
     }
 
     static async findById(id) {
-        const { rows } = await pool.query(
-            `SELECT * FROM "Chunks" WHERE "id" = $1;`,
-            [id]
+        const { rows } = await ServiceErrorHandler.handleDatabaseOperation(
+            () => pool.query(
+                `SELECT * FROM "Chunks" WHERE "id" = $1;`,
+                [id]
+            ),
+            'chunk retrieval by ID',
+            { chunkId: id }
         );
         return rows[0] || null;
     }
@@ -31,8 +40,16 @@ export default class Chunk {
         const sqlCount = `SELECT COUNT(*)::int AS count FROM "Chunks";`;
 
         const [rowsRes, countRes] = await Promise.all([
-            pool.query(sqlRows, [limit, offset]),
-            pool.query(sqlCount),
+            ServiceErrorHandler.handleDatabaseOperation(
+                () => pool.query(sqlRows, [limit, offset]),
+                'chunks listing',
+                { limit, offset }
+            ),
+            ServiceErrorHandler.handleDatabaseOperation(
+                () => pool.query(sqlCount),
+                'chunks count',
+                {}
+            )
         ]);
 
         return { rows: rowsRes.rows, total: countRes.rows[0].count };
@@ -77,7 +94,11 @@ export default class Chunk {
             `;
         values.push(id);
 
-        const { rows } = await pool.query(sql, values);
+        const { rows } = await ServiceErrorHandler.handleDatabaseOperation(
+            () => pool.query(sql, values),
+            'chunk update',
+            { chunkId: id, updateFields: Object.keys(updateData) }
+        );
         return rows[0] || null;
     }
 
@@ -87,7 +108,11 @@ export default class Chunk {
             WHERE "id" = $1
             RETURNING *;
             `;
-        const { rows } = await pool.query(sql, [id]);
+        const { rows } = await ServiceErrorHandler.handleDatabaseOperation(
+            () => pool.query(sql, [id]),
+            'chunk deletion',
+            { chunkId: id }
+        );
         return rows[0] || null;
     }
 
@@ -119,15 +144,19 @@ export default class Chunk {
         const metadataFilter = filters.metadata || {};
         const autotagFilter = filters.autotag || {};
 
-        const { rows } = await pool.query(sql, [
-            formattedEmbedding,              
-            tenantId,                        
-            corpusId,                        
-            topK,                           
-            JSON.stringify(metadataFilter),  
-            JSON.stringify(autotagFilter),
-            similarityThreshold
-        ]);
+        const { rows } = await ServiceErrorHandler.handleDatabaseOperation(
+            () => pool.query(sql, [
+                formattedEmbedding,              
+                tenantId,                        
+                corpusId,                        
+                topK,                           
+                JSON.stringify(metadataFilter),  
+                JSON.stringify(autotagFilter),
+                similarityThreshold
+            ]),
+            'RAG similarity search',
+            { tenantId, corpusId, topK, similarityThreshold }
+        );
 
         return rows;
     }

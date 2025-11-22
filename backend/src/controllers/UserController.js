@@ -1,99 +1,263 @@
 // src/controllers/UserController.js
-import User from '../models/Users.js'
+import User from '../models/Users.js';
+import { 
+    ValidationError, 
+    NotFoundError, 
+    ConflictError 
+} from "../errors/AppError.js";
+import { ErrorResponse, ValidationHelper } from "../errors/ErrorResponse.js";
+import { ServiceErrorHandler } from "../utils/ServiceErrorHandler.js";
+import { asyncHandler } from "../middleware/errorHandler.js";
 
 export default class UserController {
-    static async createUser(req, res) {
-        try {
-            const { tenantId, fullName, email, role } = req.body;
-            if (!tenantId) {
-                return res.status(400).json({ error: 'Tenant ID is required.' });
-            }
-            if (!fullName || typeof fullName !== 'string') {
-                return res.status(400).json({ error: 'Full name is required.' });
-            }
-            if (!email || typeof email !== 'string') {
-                return res.status(400).json({ error: 'Email is required.' });
-            }
-            if (!role || typeof role !== 'string') {
-                return res.status(400).json({ error: 'Role is required.' });
-            }
+    static createUser = asyncHandler(async (req, res) => {
+        const { tenantId, fullName, email, role } = req.body;
 
-            const existing = await User.findByEmail(email.trim());
-            if (existing) {
-                return res.status(409).json({ error: 'User with this email already exists.' });
-            }
+        // Validate required fields
+        const requiredErrors = ValidationHelper.validateRequired(req.body, ['tenantId', 'fullName', 'email', 'role']);
+        const typeErrors = ValidationHelper.validateTypes(req.body, {
+            tenantId: 'string',
+            fullName: 'string',
+            email: 'string',
+            role: 'string'
+        });
 
-            const created = await User.create({ tenantId, fullName: fullName.trim(), email: email.trim(), role: role.trim() });
-            return res.status(201).json(created);
-        } catch (error) {
-            console.error('Error creating user:', error);
-            return res.status(500).json({ error: 'Internal server error.' });
+        const validationErrors = ValidationHelper.combineErrors(requiredErrors, typeErrors);
+
+        // Validate UUID
+        if (tenantId) {
+            const uuidError = ValidationHelper.validateUUID(tenantId, 'tenantId');
+            if (uuidError) validationErrors.tenantId = uuidError;
         }
-    }
 
-    static async listUsers(req, res) {
-        try {
-            const limit = Math.min(parseInt(req.query.limit, 10) || 50, 1000);
-            const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
-            const offset = (page - 1) * limit;
-
-            const { rows, total } = await User.findAll({ limit, offset });
-            return res.json({ results: rows, stats: { total, page, limit } });
-        } catch (error) {
-            console.error('Error listing users:', error);
-            return res.status(500).json({ error: 'Internal server error.' });
+        // Validate email format
+        if (email) {
+            const emailError = ValidationHelper.validateEmail(email, 'email');
+            if (emailError) validationErrors.email = emailError;
         }
-    }
 
-    static async getUser(req, res) {
-        try {
-            const { id } = req.params;
-            const user = await User.findById(id);
-            if (!user) {
-                return res.status(404).json({ error: 'User not found.' });
+        // Validate role
+        if (role && !['admin', 'user', 'viewer'].includes(role.trim().toLowerCase())) {
+            validationErrors.role = 'Role must be one of: admin, user, viewer';
+        }
+
+        // Validate name length
+        if (fullName && fullName.trim().length < 2) {
+            validationErrors.fullName = 'Full name must be at least 2 characters long';
+        }
+
+        if (Object.keys(validationErrors).length > 0) {
+            throw new ValidationError('Validation failed', validationErrors);
+        }
+
+        // Check for duplicate email
+        const existing = await ServiceErrorHandler.handleDatabaseOperation(
+            () => User.findByEmail(email.trim()),
+            'duplicate email check',
+            { email: email.trim() }
+        );
+
+        if (existing) {
+            throw new ConflictError('User with this email already exists', {
+                field: 'email',
+                value: email.trim()
+            });
+        }
+
+        // Create user
+        const created = await ServiceErrorHandler.handleDatabaseOperation(
+            () => User.create({ 
+                tenantId, 
+                fullName: fullName.trim(), 
+                email: email.trim().toLowerCase(), 
+                role: role.trim().toLowerCase() 
+            }),
+            'user creation',
+            { tenantId, email: email.trim() }
+        );
+
+        ServiceErrorHandler.logOperation('User created successfully', {
+            userId: created.id,
+            tenantId,
+            email: created.email,
+            role: created.role
+        });
+
+        res.status(201).json(ErrorResponse.success(created, 'User created successfully'));
+    });
+
+    static listUsers = asyncHandler(async (req, res) => {
+        const limit = Math.min(parseInt(req.query.limit, 10) || 50, 1000);
+        const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+        const offset = (page - 1) * limit;
+
+        // Validate pagination parameters
+        if (isNaN(limit) || limit < 1) {
+            throw new ValidationError('Limit must be a positive number');
+        }
+        if (isNaN(page) || page < 1) {
+            throw new ValidationError('Page must be a positive number');
+        }
+
+        // Add tenant filtering support
+        const { tenantId, role } = req.query;
+        const filters = {};
+        
+        if (tenantId) {
+            const uuidError = ValidationHelper.validateUUID(tenantId, 'tenantId');
+            if (uuidError) throw new ValidationError(uuidError);
+            filters.tenantId = tenantId;
+        }
+
+        if (role) {
+            if (!['admin', 'user', 'viewer'].includes(role.toLowerCase())) {
+                throw new ValidationError('Role must be one of: admin, user, viewer');
             }
-            return res.json({ results: user });
-        } catch (error) {
-            console.error('Error getting user:', error);
-            return res.status(500).json({ error: 'Internal server error.' });
+            filters.role = role.toLowerCase();
         }
-    }
 
-    static async updateUser(req, res) {
-        try {
-            const { id } = req.params;
-            const { fullName, email, role } = req.body;
-            if (id) {
-                const existing = await User.findById(id);
-                if (existing && existing.id !== id){
-                    return res.status(409).json({error : 'Email already exists in the Tenant'})
-                }
-            }
-            const updated = await User.update(id, { fullName, role });
-            if (!updated){
-                return res.status(404).json({error: 'User not found with email mentioned'})
-            }
-            return res.json({results: updated})
+        const result = await ServiceErrorHandler.handleDatabaseOperation(
+            () => User.findAll({ limit, offset, filters }),
+            'user list retrieval',
+            { limit, offset, page, filters }
+        );
 
-        }
-        catch(err) {
-            console.log('UpdateUser error:', err)
-            return res.status(500).json({error: 'Internal server error'})
-        }
-    }
+        res.json(ErrorResponse.paginated(result.rows, {
+            page,
+            limit,
+            total: result.total
+        }));
+    });
 
-    static async deleteUser(req, res) {
-        try {
-            const { id } = req.params;
-            const user = await User.findById(id);
-            if (!user) {
-                return res.status(404).json({ error: 'User not found.' });
-            }
-            await User.delete(id);
-            return res.status(204).send();
-        } catch (error) {
-            console.error('Error deleting user:', error);
-            return res.status(500).json({ error: 'Internal server error.' });
+    static getUser = asyncHandler(async (req, res) => {
+        const { id } = req.params;
+
+        // Validate UUID format
+        const uuidError = ValidationHelper.validateUUID(id, 'User ID');
+        if (uuidError) {
+            throw new ValidationError(uuidError);
         }
-    }
+
+        const user = await ServiceErrorHandler.handleDatabaseOperation(
+            () => User.findById(id),
+            'user retrieval',
+            { userId: id }
+        );
+
+        if (!user) {
+            throw new NotFoundError('User', id);
+        }
+
+        res.json(ErrorResponse.success(user));
+    });
+
+    static updateUser = asyncHandler(async (req, res) => {
+        const { id } = req.params;
+        const { fullName, role } = req.body; // Note: email updates not allowed for security
+
+        // Validate UUID format
+        const uuidError = ValidationHelper.validateUUID(id, 'User ID');
+        if (uuidError) {
+            throw new ValidationError(uuidError);
+        }
+
+        // Validate update data types
+        const typeErrors = ValidationHelper.validateTypes(req.body, {
+            ...(fullName !== undefined && { fullName: 'string' }),
+            ...(role !== undefined && { role: 'string' })
+        });
+
+        const validationErrors = { ...typeErrors };
+
+        // Validate role if provided
+        if (role !== undefined && !['admin', 'user', 'viewer'].includes(role.trim().toLowerCase())) {
+            validationErrors.role = 'Role must be one of: admin, user, viewer';
+        }
+
+        // Validate name length if provided
+        if (fullName !== undefined && fullName.trim().length < 2) {
+            validationErrors.fullName = 'Full name must be at least 2 characters long';
+        }
+
+        if (Object.keys(validationErrors).length > 0) {
+            throw new ValidationError('Validation failed', validationErrors);
+        }
+
+        // Check if user exists
+        const existingUser = await ServiceErrorHandler.handleDatabaseOperation(
+            () => User.findById(id),
+            'user existence check',
+            { userId: id }
+        );
+
+        if (!existingUser) {
+            throw new NotFoundError('User', id);
+        }
+
+        // Sanitize update data
+        const updateData = ServiceErrorHandler.sanitizeInput(req.body, ['fullName', 'role']);
+        if (updateData.fullName) updateData.fullName = updateData.fullName.trim();
+        if (updateData.role) updateData.role = updateData.role.trim().toLowerCase();
+
+        // Update user
+        const updated = await ServiceErrorHandler.handleDatabaseOperation(
+            () => User.update(id, updateData),
+            'user update',
+            { userId: id, updateData }
+        );
+
+        ServiceErrorHandler.logOperation('User updated successfully', {
+            userId: id,
+            changes: Object.keys(updateData),
+            tenantId: existingUser.tenantId
+        });
+
+        res.json(ErrorResponse.success(updated, 'User updated successfully'));
+    });
+
+    static deleteUser = asyncHandler(async (req, res) => {
+        const { id } = req.params;
+
+        // Validate UUID format
+        const uuidError = ValidationHelper.validateUUID(id, 'User ID');
+        if (uuidError) {
+            throw new ValidationError(uuidError);
+        }
+
+        // Check if user exists
+        const existingUser = await ServiceErrorHandler.handleDatabaseOperation(
+            () => User.findById(id),
+            'user existence check',
+            { userId: id }
+        );
+
+        if (!existingUser) {
+            throw new NotFoundError('User', id);
+        }
+
+        // TODO: Add business logic validation
+        // - Check if user has created documents/corpora
+        // - Implement soft delete vs hard delete logic
+        // - Check permissions (can't delete admin users, etc.)
+
+        const deleted = await ServiceErrorHandler.handleDatabaseOperation(
+            () => User.delete(id),
+            'user deletion',
+            { userId: id }
+        );
+
+        ServiceErrorHandler.validateBusinessLogic(
+            deleted,
+            'Failed to delete user',
+            { userId: id }
+        );
+
+        ServiceErrorHandler.logOperation('User deleted successfully', {
+            userId: id,
+            email: existingUser.email,
+            tenantId: existingUser.tenantId
+        });
+
+        res.status(204).send();
+    });
 }

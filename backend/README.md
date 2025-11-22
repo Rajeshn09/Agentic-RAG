@@ -529,7 +529,7 @@ All endpoints return consistent error responses:
 - **Reranker:** `/api/text/rerank` - Rerank search results
 - **LLM Service:** `/api/llm/service` - Generate final answers
 
-## 🧪 Testing Examples
+## Testing Examples
 
 ### Health Check
 ```bash

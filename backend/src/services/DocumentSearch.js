@@ -1,36 +1,60 @@
 import Chunk from '../models/Chunk.js';
 import DocumentUpload from './DocumentUpload.js';
+import { ServiceErrorHandler } from '../utils/ServiceErrorHandler.js';
+import { ValidationError, BusinessLogicError } from '../errors/AppError.js';
 
 export default class DocumentSearch {
     
     static async searchChunks({ tenantId, corpusId, query, queryEmbedding, embeddingModel, filters = {}, limit = 10, rerankModel = 'rerank-2.5', llmModel = 'gemini-2.5-flash', prompt = null, similarityThreshold = 0.30 }) {
-        if (!tenantId || !corpusId) {
-            throw new Error('tenantId and corpusId are required');
-        }
+        // Input validation
+        ServiceErrorHandler.validateBusinessLogic(
+            tenantId && corpusId,
+            'tenantId and corpusId are required'
+        );
 
-        if (!query && !queryEmbedding) {
-            throw new Error('Either query (text) or queryEmbedding is required');
-        }
+        ServiceErrorHandler.validateBusinessLogic(
+            query || queryEmbedding,
+            'Either query (text) or queryEmbedding is required'
+        );
 
         let embedding = queryEmbedding;
 
         // Generate embedding if not provided
         if (query && !queryEmbedding) {
-            const embeddings = await DocumentUpload.textEmbed({ 
-                chunks: [query], 
-                model: embeddingModel 
-            });
+            ServiceErrorHandler.validateBusinessLogic(
+                embeddingModel,
+                'embeddingModel is required when providing text query'
+            );
+
+            const embeddings = await ServiceErrorHandler.handleServiceOperation(
+                () => DocumentUpload.textEmbed({ 
+                    chunks: [query], 
+                    model: embeddingModel 
+                }),
+                'embedding service',
+                { query: query.substring(0, 100) + '...', model: embeddingModel }
+            );
+            
+            ServiceErrorHandler.validateBusinessLogic(
+                embeddings && embeddings.length > 0,
+                'Failed to generate embedding for query'
+            );
+            
             embedding = embeddings[0];
         }
 
         // Step 1: Get initial search results
-        const rawResults = await Chunk.ragSearch(
-            tenantId,
-            corpusId,
-            embedding,
-            filters,
-            Math.min(limit * 2, 100), // Get more results for filtering
-            similarityThreshold
+        const rawResults = await ServiceErrorHandler.handleDatabaseOperation(
+            () => Chunk.ragSearch(
+                tenantId,
+                corpusId,
+                embedding,
+                filters,
+                Math.min(limit * 2, 100), // Get more results for filtering
+                similarityThreshold
+            ),
+            'vector search',
+            { tenantId, corpusId, limit, similarityThreshold }
         );
 
         // No need to filter again since it's done in the database
@@ -47,36 +71,41 @@ export default class DocumentSearch {
         const documents = searchResults.map(chunk => chunk.chunkText);
         
         let rerankedResults;
-        try {
-            const rerankResponse = await fetch(`${process.env.MICROSERVICE_API_URL}/api/text/rerank`, {
-                method: 'POST',
-                body: JSON.stringify({
-                    query,
-                    documents,
-                    model: rerankModel,
-                    top_k: Math.min(searchResults.length, limit)
-                }),
-                headers: {
-                    'Content-Type': 'application/json',
-                    'x-api-token': process.env.MICROSERVICE_API_TOKEN
-                }
-            });
+        if (query && searchResults.length > 0) {
+            try {
+                const rerankResponse = await ServiceErrorHandler.handleExternalService(
+                    () => fetch(`${process.env.MICROSERVICE_API_URL}/api/text/rerank`, {
+                        method: 'POST',
+                        body: JSON.stringify({
+                            query,
+                            documents,
+                            model: rerankModel,
+                            top_k: Math.min(searchResults.length, limit)
+                        }),
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'x-api-token': process.env.MICROSERVICE_API_TOKEN
+                        }
+                    }),
+                    'reranking service'
+                );
 
-            if (!rerankResponse.ok) {
-                console.warn('Re-ranking failed, using original order');
-                rerankedResults = searchResults.slice(0, limit);
-            } else {
                 const rerankData = await rerankResponse.json();
-                // Map re-ranked results back to original chunk data
-                rerankedResults = rerankData.result.data.map(item => ({
-                    ...searchResults[item.index],
-                    relevance_score: item.relevance_score
-                }));
+                if (rerankData.result?.data) {
+                    // Map re-ranked results back to original chunk data
+                    rerankedResults = rerankData.result.data.map(item => ({
+                        ...searchResults[item.index],
+                        relevance_score: item.relevance_score
+                    }));
+                } else {
+                    throw new Error('Invalid reranking response format');
+                }
+            } catch (rerankError) {
+                console.warn('Re-ranking failed, using original order:', rerankError.message);
+                rerankedResults = searchResults.slice(0, limit);
             }
-        } catch (rerankError) {
-            console.warn('Re-ranking error:', rerankError.message);
+        } else {
             rerankedResults = searchResults.slice(0, limit);
-            
         }
 
         // Step 3: Prepare content for LLM
@@ -85,31 +114,35 @@ export default class DocumentSearch {
         ).join('\n');
 
         // Step 4: Generate answer using LLM
-        const finalPrompt = prompt || `Based on the following documents, please provide a comprehensive answer to the user's query: "${query}"\n\nDocuments:\n${content}\n\nPlease provide a clear and accurate answer based solely on the information provided in the documents.`;
+        const finalPrompt = prompt || `Based on the following documents, please provide a comprehensive answer to the user's query: "${query || '[Query from embedding]'}"\n\nDocuments:\n${content}\n\nPlease provide a clear and accurate answer based solely on the information provided in the documents.`;
 
         let answer = "Unable to generate answer at this time.";
         try {
-            const llmResponse = await fetch(`${process.env.MICROSERVICE_API_URL}/api/llm/service`, {
-                method: 'POST',
-                body: JSON.stringify({
-                    prompt: finalPrompt,
-                    content: content,
-                    model: llmModel
+            const llmResponse = await ServiceErrorHandler.handleExternalService(
+                () => fetch(`${process.env.MICROSERVICE_API_URL}/api/llm/service`, {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        prompt: finalPrompt,
+                        content: content,
+                        model: llmModel
+                    }),
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'x-api-token': process.env.MICROSERVICE_API_TOKEN
+                    }
                 }),
-                headers: {
-                    'Content-Type': 'application/json',
-                    'x-api-token': process.env.MICROSERVICE_API_TOKEN
-                }
-            });
+                'LLM service'
+            );
 
-            if (llmResponse.ok) {
-                const llmData = await llmResponse.json();
+            const llmData = await llmResponse.json();
+            if (llmData.result) {
                 answer = llmData.result;
             } else {
-                console.error('LLM service failed');
+                throw new Error('No result returned from LLM service');
             }
         } catch (llmError) {
-            console.error('LLM error:', llmError.message);
+            console.error('LLM generation failed:', llmError.message);
+            answer = `Based on the retrieved documents, I found ${rerankedResults.length} relevant chunks but couldn't generate a synthesized answer due to a service error. Please review the individual chunks below.`;
         }
 
         // Step 5: Return structured response
